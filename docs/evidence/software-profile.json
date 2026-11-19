@@ -1,0 +1,39 @@
+{
+  "menu": {
+    "sample": 24,
+    "medianMs": 16.699999999999818,
+    "p95Ms": 1549.8999999999996,
+    "meanFPS": 5.017561465127948,
+    "readyMs": 6738.399999999907,
+    "heapBytes": 47400000,
+    "x": 0,
+    "z": 15.4,
+    "yaw": -0.66,
+    "mode": "menu",
+    "stage": 0,
+    "calls": 223,
+    "triangles": 388180,
+    "textures": 71,
+    "geometries": 83,
+    "renderWidth": 454
+  },
+  "yard": {
+    "sample": 24,
+    "medianMs": 150,
+    "p95Ms": 216.70000000001164,
+    "meanFPS": 6.545752079639997,
+    "readyMs": 6738.399999999907,
+    "heapBytes": 47400000,
+    "x": 0.9796975894641244,
+    "z": -17.72784627096322,
+    "yaw": -0.66,
+    "mode": "play",
+    "stage": 5,
+    "calls": 49,
+    "triangles": 162972,
+    "textures": 87,
+    "geometries": 115,
+    "renderWidth": 440
+  },
+  "errors": []
+}

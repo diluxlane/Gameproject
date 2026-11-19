@@ -1,107 +1,974 @@
-/** AFTERSIGNAL: 2030 - zero-download-art WebGL2 world renderer. MIT licensed original code. */
-export const NODES = Object.freeze([
-  {id:'shelter',name:'Shelter 17',x:0,z:38,kind:'shelter'},
-  {id:'cacheA',name:'Emergency supply cache',x:42,z:-20,kind:'supply'},
-  {id:'cacheB',name:'Evacuation supply cache',x:-44,z:-64,kind:'supply'},
-  {id:'archive',name:'Classified archive',x:-62,z:-126,kind:'archive'},
-  {id:'relay',name:'Signal relay station',x:52,z:-175,kind:'relay'},
-  {id:'rift',name:'The Convergence Rift',x:0,z:-257,kind:'portal'}
-]);
-const TAU=Math.PI*2;
-const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
-const mix=(a,b,t)=>a+(b-a)*t;
-const randomFrom=(seed)=>()=>{seed=(Math.imul(seed,1664525)+1013904223)|0;return (seed>>>0)/4294967296};
-export function terrainHeight(x,z){return 1.2*Math.sin(x*.025)+1.3*Math.cos(z*.021)+.64*Math.sin(x*.077+z*.032)+.48*Math.cos(z*.069-x*.031)}
-const vertex=`#version 300 es
-precision highp float;
-layout(location=0) in vec3 aPos;
-layout(location=1) in vec3 aNormal;
-layout(location=2) in vec3 aColor;
-layout(location=3) in float aKind;
-uniform mat4 uVP;uniform float uTime;
-out vec3 vNormal;out vec3 vColor;out vec3 vWorld;out float vKind;
-void main(){vec3 p=aPos;if(aKind>3.4&&aKind<4.5){p.x+=sin(uTime*1.4+aPos.x*.13+aPos.z*.19)*.35*max(.1,aNormal.y);p.z+=cos(uTime*.8+aPos.z*.15)*.15;}
-if(aKind>5.0){p.y+=sin(uTime*.7+aPos.x*.09)*.7;}
-vWorld=p;vNormal=aNormal;vColor=aColor;vKind=aKind;gl_Position=uVP*vec4(p,1.);}`;
-const fragment=`#version 300 es
-precision highp float;
-in vec3 vNormal;in vec3 vColor;in vec3 vWorld;in float vKind;
-out vec4 frag;
-uniform vec3 uEye;uniform float uTime;uniform float uDay;uniform float uQuality;
-float hash(vec3 p){return fract(sin(dot(p,vec3(12.9898,78.233,47.128)))*43758.5453);}
-void main(){vec3 n=normalize(vNormal);float lit=clamp(dot(n,normalize(vec3(.35,.78,-.5)))*.62+.45,.17,1.1);float speck=(hash(floor(vWorld*1.25))-.5)*.15;vec3 c=vColor*(lit+speck);if(vKind>1.5&&vKind<3.5){c=vColor*(1.1+sin(uTime*1.7+vWorld.y*.23)*.14);}if(vKind>4.5&&vKind<5.5){c=vColor*(.6+.4*sin(uTime*2.1+vWorld.x*.3));}
-float d=length(vWorld-uEye);vec3 fog=mix(vec3(.085,.142,.162),vec3(.16,.25,.265),uDay*.55);float density=mix(.010,.0065,uQuality);float visibility=exp(-d*density);c=mix(fog,c,clamp(visibility,0.,1.));c*=mix(.60,1.0,uDay);
-// restrained filmic desaturation
-c=mix(c,vec3(dot(c,vec3(.2126,.7152,.0722))),.12);frag=vec4(pow(max(c,0.),vec3(.88)),1.);}`;
-const skyV=`#version 300 es
-precision highp float;out vec2 vUv;void main(){vec2 p=vec2((gl_VertexID<<1)&2,gl_VertexID&2);vUv=p*.5;gl_Position=vec4(p*2.-1.,0.,1.);}`;
-const skyF=`#version 300 es
-precision highp float;in vec2 vUv;out vec4 frag;uniform float uTime,uDay,uYaw,uPitch,uAspect;
-float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453123);}
-void main(){vec2 uv=vUv;float h=clamp(uv.y+.1*sin(uPitch),0.,1.);vec3 lower=mix(vec3(.10,.19,.21),vec3(.14,.22,.24),uDay);vec3 upper=mix(vec3(.009,.018,.039),vec3(.026,.078,.13),uDay);vec3 col=mix(lower,upper,smoothstep(.04,.95,h));
-float cloud=sin(uv.x*16.+uTime*.008+sin(uv.y*21.))*sin(uv.y*25.+uTime*.014);col+=vec3(.033,.04,.041)*cloud*smoothstep(.12,.64,h);float stars=step(.997,hash(floor(vec2((uv.x+uYaw*.14)*480.,uv.y*290.))))*smoothstep(.5,.95,h);col+=vec3(.31,.45,.52)*stars*(1.-uDay);
-vec2 sun=uv-vec2(.8-.13*sin(uYaw),.69+.09*sin(uPitch));float glow=exp(-length(sun*vec2(uAspect,1.))*16.);col+=mix(vec3(.12,.08,.05),vec3(.15,.20,.20),uDay)*glow;
-frag=vec4(col,1.);}`;
-function compile(gl,type,code){const s=gl.createShader(type);gl.shaderSource(s,code);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS)){throw Error(gl.getShaderInfoLog(s)||'Shader compilation failed')}return s}
-function program(gl,v,f){const p=gl.createProgram();gl.attachShader(p,compile(gl,gl.VERTEX_SHADER,v));gl.attachShader(p,compile(gl,gl.FRAGMENT_SHADER,f));gl.linkProgram(p);if(!gl.getProgramParameter(p,gl.LINK_STATUS))throw Error(gl.getProgramInfoLog(p)||'GL program failed');return p}
-function perspective(fov,aspect,near,far){const f=1/Math.tan(fov/2),range=1/(near-far);return new Float32Array([f/aspect,0,0,0,0,f,0,0,0,0,(far+near)*range,-1,0,0,2*far*near*range,0])}
-function matmul(a,b){const o=new Float32Array(16);for(let c=0;c<4;c++)for(let r=0;r<4;r++)o[c*4+r]=a[r]*b[c*4]+a[4+r]*b[c*4+1]+a[8+r]*b[c*4+2]+a[12+r]*b[c*4+3];return o}
-function view(eye,yaw,pitch){const sy=Math.sin(yaw),cy=Math.cos(yaw),sp=Math.sin(pitch),cp=Math.cos(pitch);const forward=[sy*cp,sp,-cy*cp],right=[cy,0,sy],up=[-sy*sp,cp,cy*sp];return new Float32Array([right[0],up[0],-forward[0],0,right[1],up[1],-forward[1],0,right[2],up[2],-forward[2],0,-right[0]*eye[0]-right[1]*eye[1]-right[2]*eye[2],-up[0]*eye[0]-up[1]*eye[1]-up[2]*eye[2],forward[0]*eye[0]+forward[1]*eye[1]+forward[2]*eye[2],1])}
-function shadeColor(c,k){return c.map(x=>x*k)}
-export class Mesh{
- constructor(){this.a=[]}
- triangle(a,b,c,color,kind=0){const u=[b[0]-a[0],b[1]-a[1],b[2]-a[2]],v=[c[0]-a[0],c[1]-a[1],c[2]-a[2]];let n=[u[1]*v[2]-u[2]*v[1],u[2]*v[0]-u[0]*v[2],u[0]*v[1]-u[1]*v[0]];const l=Math.hypot(...n)||1;n=n.map(q=>q/l);for(const p of [a,b,c])this.a.push(...p,...n,...color,kind)}
- quad(a,b,c,d,color,kind=0){this.triangle(a,b,c,color,kind);this.triangle(a,c,d,color,kind)}
- box(x,y,z,w,h,d,color,kind=0){const a=x-w/2,b=x+w/2,c=z-d/2,e=z+d/2,t=y+h;const P=[ [a,y,c],[b,y,c],[b,t,c],[a,t,c],[a,y,e],[b,y,e],[b,t,e],[a,t,e]];this.quad(P[0],P[1],P[2],P[3],shadeColor(color,.83),kind);this.quad(P[5],P[4],P[7],P[6],color,kind);this.quad(P[4],P[0],P[3],P[7],shadeColor(color,.77),kind);this.quad(P[1],P[5],P[6],P[2],shadeColor(color,.87),kind);this.quad(P[3],P[2],P[6],P[7],shadeColor(color,1.16),kind)}
- cylinder(x,y,z,r,h,col,steps=9,kind=0){for(let i=0;i<steps;i++){const a=i/steps*TAU,b=(i+1)/steps*TAU;const x1=x+r*Math.cos(a),z1=z+r*Math.sin(a),x2=x+r*Math.cos(b),z2=z+r*Math.sin(b);this.quad([x1,y,z1],[x2,y,z2],[x2,y+h,z2],[x1,y+h,z1],col,kind);}}
- cone(x,y,z,r,h,col,steps=8,kind=0){for(let i=0;i<steps;i++){const a=i/steps*TAU,b=(i+1)/steps*TAU;this.triangle([x+r*Math.cos(a),y,z+r*Math.sin(a)],[x+r*Math.cos(b),y,z+r*Math.sin(b)],[x,y+h,z],shadeColor(col,.80+.2*Math.sin(a*2)),kind)}}
- sphere(x,y,z,r,col,lat=7,lon=11,kind=0){for(let i=0;i<lat;i++){const p0=i/lat*Math.PI,p1=(i+1)/lat*Math.PI;for(let j=0;j<lon;j++){const a=j/lon*TAU,b=(j+1)/lon*TAU;const f=(p,t)=>[x+r*Math.sin(p)*Math.cos(t),y+r*Math.cos(p),z+r*Math.sin(p)*Math.sin(t)];this.quad(f(p0,a),f(p0,b),f(p1,b),f(p1,a),col,kind)}}}
- ring(x,y,z,R,r,color,segments=44,kind=2){for(let i=0;i<segments;i++){const a=i/segments*TAU,b=(i+1)/segments*TAU;const p=(rr,t)=>[x+rr*Math.cos(t),y+rr*Math.sin(t),z];this.quad(p(R-r,a),p(R+r,a),p(R+r,b),p(R-r,b),color,kind)}}
- get data(){return new Float32Array(this.a)}
-}
-function tree(m,x,z,size,rng){const y=terrainHeight(x,z);m.cylinder(x,y,z,.35*size,4*size,[.15,.17,.16],6);for(let j=0;j<3;j++){const hh=2.8*size+j*2.4*size;const r=(3.3-j*.8)*size;m.cone(x,y+hh,z,r,5*size,shadeColor([.14,.25,.21],(.72+rng()*.3)),7,4)}}
-function tower(m,x,z,rng){const y=terrainHeight(x,z);const h=16+rng()*37,w=9+rng()*11,d=8+rng()*10;const col=shadeColor([.19,.27,.30],.65+rng()*.5);m.box(x,y,z,w,h,d,col);m.box(x,y+h,z,w+1.4,.75,d+1.4,[.14,.18,.20]);for(let f=0;f<Math.floor(h/5);f++)for(let j=-1;j<=1;j++){if(rng()>.35){const zz=z-d/2-.07,xx=x+j*w/4;m.box(xx,y+3+f*5,zz,1.1,1.1,.12,rng()>.86?[.48,.79,.8]:[.09,.16,.19],2)}}}
-function marker(m,node){const x=node.x,z=node.z,y=terrainHeight(x,z),c=node.kind==='portal'?[.22,.71,.77]:node.kind==='supply'?[.88,.65,.37]:[.45,.78,.8];if(node.kind==='portal'){for(let k=0;k<4;k++)m.ring(x,y+11,z,13+k*1.35,.35,c,42,2);m.box(x,y,z,20,.25,5,[.15,.24,.26]);return}
-if(node.kind==='shelter'){m.box(x-15,y,z+3,17,10,15,[.18,.29,.30]);m.box(x-15,y+10,z+3,19,1,17,[.10,.17,.19]);m.box(x-15,y+2,z-4.65,4,3,.13,[.55,.77,.72],2)}
-if(node.kind==='supply'){m.box(x,y,z,3.7,2.4,3.1,[.43,.36,.20]);m.box(x,y+2.2,z,3.85,.3,3.3,c,2)}
-if(node.kind==='archive'){m.box(x+10,y,z-8,24,17,20,[.16,.22,.25]);m.box(x,y,z,4,5,2,[.26,.40,.42],2);m.box(x,y+5,z,.7,9,.6,c,2)}
-if(node.kind==='relay'){m.cylinder(x,y,z,1,32,[.22,.33,.34],10);for(let k=0;k<3;k++){const yy=y+12+k*8;m.ring(x,yy,z,3.5,.25,[.4,.66,.67],16,2)}m.box(x,y,z+4,4,3,2.3,[.25,.33,.35])}
-if(node.kind==='shelter'||node.kind==='supply'){m.cylinder(x+3,y,z,0.17,6,[.30,.43,.45],7);m.sphere(x+3,y+6.6,z,.58,c,6,8,2)}
-}
-export function buildWorld(){const m=new Mesh(),rng=randomFrom(20302019);const S=400,div=85;for(let i=0;i<div;i++)for(let j=0;j<div;j++){const x=-S+2*S*i/div,z=-S+2*S*j/div,X=x+2*S/div,Z=z+2*S/div;const y=terrainHeight(x,z)-.12,Y=terrainHeight(X,z)-.12,b=terrainHeight(X,Z)-.12,c=terrainHeight(x,Z)-.12;const f=Math.sin(x*.063)*Math.cos(z*.036),cl=[.19+.055*f,.255+.055*f,.231+.046*f];m.quad([x,y,z],[X,Y,z],[X,b,Z],[x,c,Z],cl)}
-// A path through the ruined city is highlighted by code-generated pavement slabs.
-for(let z=-277;z<73;z+=12){const y=terrainHeight(1,z)-.04;m.box(1,y,z,13,.2,11,[.20,.25,.25]);m.box(1,y+.22,z,1,.03,3,[.30,.37,.36])}
-for(let x=-100;x<100;x+=10)m.box(x,terrainHeight(x,-104),-104,9,.2,11,[.21,.25,.24]);
-// Ruined city blocks surround, but do not block, the exploration route.
-for(let z=-68;z>-230;z-=27){for(const x of [-110,-83,-59,63,92,118]){if(rng()>.22)tower(m,x+(rng()-.5)*12,z+(rng()-.5)*10,rng)}}
-for(let i=0;i<145;i++){const x=(rng()-.5)*490,z=(rng()-.5)*630;if(Math.abs(x)<23&&z<83&&z>-295)continue;if(NODES.some(n=>Math.hypot(x-n.x,z-n.z)<17))continue;tree(m,x,z,.45+rng()*1.6,rng)}
-for(let i=0;i<150;i++){const x=(rng()-.5)*620,z=(rng()-.5)*690;if(NODES.some(n=>Math.hypot(x-n.x,z-n.z)<10))continue;m.box(x,terrainHeight(x,z),z,1+rng()*3,.4+rng()*1.2,1+rng()*3,[.19+rng()*.04,.24,.24])}
-for(let z=-225;z<60;z+=38){const x=14,y=terrainHeight(x,z);m.cylinder(x,y,z,.33,10,[.30,.39,.40],7);m.box(x-1.5,y+9.5,z,3.3,.4,.7,[.23,.39,.40]);m.box(x-3.05,y+9,z,1,.2,.75,[.46,.81,.8],2)}
-// Alpine silhouettes remain cheap mesh geometry rather than image skyboxes.
-for(let i=0;i<26;i++){const x=-440+i*35,z=-390+(rng()-.5)*60,h=70+rng()*130;m.cone(x,terrainHeight(x,z)-12,z,42+rng()*38,h,[.13,.22,.22],5)}
-for(const node of NODES)marker(m,node);
-// A distant classified aircraft hangar and fictional oceanic anomaly observatory.
-m.box(-170,terrainHeight(-170,-245),-245,58,13,43,[.15,.25,.26]);m.box(-170,terrainHeight(-170,-245)+13,-245,62,1,47,[.16,.20,.23]);
-return m.data}
-function dynamicWorld(t,game){const m=new Mesh();const move=Math.sin(t*.32),x=28+move*24,z=-115+Math.cos(t*.23)*16,y=terrainHeight(x,z);
-// Patrolling robot: abstract surveillance obstacle, no weaponry.
-m.box(x,y+.8,z,2.1,2.5,1.6,[.28,.38,.41]);m.box(x,y+3.2,z,1.6,1.4,1.5,[.30,.45,.47]);m.box(x,y+4.05,z-.83,1.05,.3,.1,[.89,.22,.22],2);for(const s of [-1,1]){m.cylinder(x+s*.7,y,z+s*.12,.26,1.1,[.2,.28,.30],6)}
-// Distant UFO: readable silhouette, generated from rings and curved surfaces.
-const ux=-100+Math.sin(t*.08)*22,uy=95+Math.sin(t*.4)*3,uz=-250;const seg=30;
-for(let i=0;i<seg;i++){const a=i/seg*TAU,b=(i+1)/seg*TAU;const p=(r,q,h)=>[ux+Math.cos(q)*r,uy+h,uz+Math.sin(q)*r];m.quad(p(15,a,0),p(15,b,0),p(8,b,3.8),p(8,a,3.8),[.22,.34,.40]);m.quad(p(15,a,0),p(15,b,0),p(14.1,b,-.45),p(14.1,a,-.45),[.26,.74,.78],2)}m.sphere(ux,uy+2,uz,6,[.27,.45,.53],7,16);
-// Gliding triangular pterosaur-like anomaly. Original abstract geometry.
-const px=-14+Math.sin(t*.24)*34,py=54+Math.sin(t*.42)*4,pz=-230+Math.cos(t*.16)*12,flap=Math.sin(t*3.1)*2.3;m.triangle([px,py,pz],[px-15,py+flap,pz+5],[px-2,py-1,pz+4],[.22,.22,.24],3);m.triangle([px,py,pz],[px+15,py+flap,pz+5],[px+2,py-1,pz+4],[.20,.21,.23],3);m.cone(px,py-1,pz,1.3,3.4,[.19,.21,.22],5,3);
-// A non-graphic mysterious wandering silhouette: it motivates avoidance.
-const sx=-28+Math.sin(t*.24)*7,sz=-175+Math.cos(t*.27)*10,sy=terrainHeight(sx,sz);m.cylinder(sx,sy,sz,.62,3.8,[.12,.18,.20],8);m.sphere(sx,sy+4.2,sz,.75,[.13,.19,.22],8,10);
-// Portal animated light core becomes more intense after the transmitter is activated.
-const portal=NODES[5],yy=terrainHeight(portal.x,portal.z)+10.5;
-for(let i=0;i<28;i++){const a=i/28*TAU+t*(.1+(i%3)*.06),r=3+(i%9)*.87;m.sphere(portal.x+Math.cos(a)*r,yy+Math.sin(a)*r,portal.z+(i%4-2)*.25,.25+i%3*.09,game.relay?[.28,.9,.92]:[.17,.42,.44],4,5,2)}
-return m.data}
-function setVAO(gl,b){const vao=gl.createVertexArray();gl.bindVertexArray(vao);gl.bindBuffer(gl.ARRAY_BUFFER,b);for(let i=0;i<4;i++){const size=i===3?1:3,offset=[0,12,24,36][i];gl.enableVertexAttribArray(i);gl.vertexAttribPointer(i,size,gl.FLOAT,false,40,offset)}gl.bindVertexArray(null);return vao}
-export class Renderer{
- constructor(canvas){this.canvas=canvas;const gl=canvas.getContext('webgl2',{alpha:false,antialias:true,depth:true,stencil:false,powerPreference:'high-performance'});if(!gl)throw Error('WebGL2 is unavailable on this device/browser.');this.gl=gl;this.worldProgram=program(gl,vertex,fragment);this.skyProgram=program(gl,skyV,skyF);this.skyVAO=gl.createVertexArray();this.worldBuffer=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,this.worldBuffer);const data=buildWorld();gl.bufferData(gl.ARRAY_BUFFER,data,gl.STATIC_DRAW);this.worldCount=data.length/10;this.worldVAO=setVAO(gl,this.worldBuffer);this.dynamicBuffer=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,this.dynamicBuffer);gl.bufferData(gl.ARRAY_BUFFER,40000,gl.DYNAMIC_DRAW);this.dynamicVAO=setVAO(gl,this.dynamicBuffer);this.quality='auto';this.stereo=false;this.frames=0;this.fps=0;this.fpsTime=0;this.lastT=0;gl.enable(gl.DEPTH_TEST);gl.depthFunc(gl.LEQUAL);gl.disable(gl.CULL_FACE);gl.clearColor(.04,.09,.12,1);this.resize();window.addEventListener('resize',()=>this.resize());window.addEventListener('orientationchange',()=>setTimeout(()=>this.resize(),250));canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();document.getElementById('error').textContent='Graphics context lost. Reload the page to restart the game.';document.getElementById('error').classList.remove('hidden')});}
- resize(){const q=this.quality==='low'?.68:this.quality==='medium'?.92:this.quality==='high'?1.5:Math.min(1.25,window.devicePixelRatio||1);this.canvas.width=Math.max(2,Math.round(innerWidth*q));this.canvas.height=Math.max(2,Math.round(innerHeight*q));}
- setQuality(q){this.quality=q;this.resize()}
- uniforms(prog,values){const gl=this.gl;for(const [k,v] of Object.entries(values)){const loc=gl.getUniformLocation(prog,k);if(loc===null)continue;if(v instanceof Float32Array)gl.uniformMatrix4fv(loc,false,v);else if(Array.isArray(v))gl.uniform3fv(loc,v);else gl.uniform1f(loc,v)}}
- draw(camera,game,t){const gl=this.gl;if(!this.canvas.width||!this.canvas.height)return;gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);const dyn=dynamicWorld(t,game);gl.bindBuffer(gl.ARRAY_BUFFER,this.dynamicBuffer);gl.bufferData(gl.ARRAY_BUFFER,dyn,gl.DYNAMIC_DRAW);const count=dyn.length/10;const half=this.stereo?2:1;for(let eye=0;eye<half;eye++){const w=Math.floor(this.canvas.width/half),aspect=w/this.canvas.height;gl.viewport(eye*w,0,w,this.canvas.height);gl.disable(gl.DEPTH_TEST);gl.useProgram(this.skyProgram);gl.bindVertexArray(this.skyVAO);this.uniforms(this.skyProgram,{uTime:t,uDay:game.daylight,uYaw:camera.yaw,uPitch:camera.pitch,uAspect:aspect});gl.drawArrays(gl.TRIANGLES,0,3);gl.enable(gl.DEPTH_TEST);gl.clear(gl.DEPTH_BUFFER_BIT);const offset=this.stereo?(eye===0?-.032:.032):0;const eyepos=[camera.x+Math.cos(camera.yaw)*offset,camera.y,camera.z+Math.sin(camera.yaw)*offset];const vp=matmul(perspective((this.stereo?83:74)*Math.PI/180,aspect,.1,1100),view(eyepos,camera.yaw,camera.pitch));gl.useProgram(this.worldProgram);this.uniforms(this.worldProgram,{uVP:vp,uEye:eyepos,uTime:t,uDay:game.daylight,uQuality:this.quality==='low'?0:1});gl.bindVertexArray(this.worldVAO);gl.drawArrays(gl.TRIANGLES,0,this.worldCount);gl.bindVertexArray(this.dynamicVAO);gl.drawArrays(gl.TRIANGLES,0,count)}gl.bindVertexArray(null);this.frames++;if(t-this.fpsTime>1){this.fps=Math.round(this.frames/(t-this.fpsTime));this.frames=0;this.fpsTime=t}}
+// Receiving Station 17. Dimensions and placement are in metres.
+import * as T from "three";
+import { MeshoptSimplifier } from "meshoptimizer/simplifier";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { HDRLoader } from "three/addons/loaders/HDRLoader.js";
+import { StereoEffect } from "three/addons/effects/StereoEffect.js";
+
+const root = import.meta.env.BASE_URL + "art/";
+const metal = (color, roughness = 0.64, metalness = 0.65) =>
+  new T.MeshStandardMaterial({ color, roughness, metalness });
+const v = (x, y, z) => new T.Vector3(x, y, z);
+const white = metal("#ada998"),
+  dark = metal("#343b39"),
+  amber = metal("#bc7736");
+const box = new T.BoxGeometry(),
+  cylinder = new T.CylinderGeometry(1, 1, 1, 12);
+const ball = new T.SphereGeometry(1, 24, 12);
+const up = v(0, 1, 0);
+const profiles = {
+  Low: [0.75, 512, false, 26],
+  Medium: [1, 1024, true, 48],
+  High: [1.35, 2048, true, 75],
+  Ultra: [1.75, 4096, true, 120],
+};
+export const stations = {
+  radio: [-2.6, 13],
+  kit: [-9, -6],
+  plant: [8, -8],
+  archive: [1, -20],
+  beacon: [5, 3],
+};
+export async function buildWorld(canvas, progress) {
+  const fixedCapture = new URLSearchParams(location.search).has("capture");
+  const renderer = new T.WebGLRenderer({
+    canvas,
+    antialias: true,
+    powerPreference: "high-performance",
+  });
+  renderer.toneMapping = T.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 0.89;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = T.PCFShadowMap;
+  renderer.shadowMap.autoUpdate = false;
+  const scene = new T.Scene(),
+    camera = new T.PerspectiveCamera(61, 1, 0.08, 640);
+  const stereoEffect = new StereoEffect(renderer);
+  const obstacles = [],
+    foliage = [],
+    batches = new Map(),
+    models = {};
+  let seed = 1731;
+  const rand = () =>
+    (seed = (Math.imul(1664525, seed) + 1013904223) >>> 0) / 4294967296;
+  let completed = 0;
+  const names = [
+    "portable_generator",
+    "metal_toolbox",
+    "covered_car",
+    "power_box_01",
+    "grass_medium_01",
+    "concrete_road_barrier",
+    "painted_wooden_bench",
+    "medical_box",
+    "street_lamp_01",
+    "fern_02",
+    "modular_factory_facade",
+    "boombox",
+    "industrial_wall_lamp",
+    "shrub_02",
+    "cardboard_box_01",
+    "painted_wooden_cabinet_02",
+    "propane_tank",
+  ];
+  const surfaces = [
+    "concrete_floor_02",
+    "rusty_metal_02",
+    "corrugated_iron_03",
+    "worn_asphalt",
+    "cracked_concrete_wall",
+  ];
+  const total = names.length + surfaces.length * 3 + 3;
+  const done = (label) => progress(++completed, total, label);
+  const tex = new T.TextureLoader(),
+    loader = new GLTFLoader();
+  const mats = {};
+  await Promise.all([
+    new HDRLoader().loadAsync(root + "dusk.hdr").then((t) => {
+      t.mapping = T.EquirectangularReflectionMapping;
+      scene.background = t;
+      scene.environment = t;
+      scene.environmentIntensity = 0.58;
+      scene.backgroundIntensity = 0.76;
+      scene.environmentRotation.y = scene.backgroundRotation.y = 2.1;
+      done("Sky and reflection probe");
+    }),
+    ...surfaces.map(async (name) => {
+      const maps = await Promise.all(
+        ["diff", "nor_gl", "rough"].map(async (ch) => {
+          const t = await tex.loadAsync(root + name + "_" + ch + ".jpg");
+          t.wrapS = t.wrapT = T.RepeatWrapping;
+          t.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+          if (ch === "diff") t.colorSpace = T.SRGBColorSpace;
+          done("Surveying surfaces");
+          return t;
+        }),
+      );
+      mats[name] = new T.MeshStandardMaterial({
+        map: maps[0],
+        normalMap: maps[1],
+        roughnessMap: maps[2],
+        roughness: 0.88,
+        metalness: /metal|iron/.test(name) ? 0.48 : 0.03,
+      });
+    }),
+    ...names.map(async (name) => {
+      models[name] = (
+        await loader.loadAsync(root + (name + "/" + name + ".gltf"))
+      ).scene;
+      done("Unpacking station equipment");
+    }),
+  ]);
+  const concrete = mats.cracked_concrete_wall,
+    rust = mats.rusty_metal_02,
+    iron = mats.corrugated_iron_03;
+  scene.fog = new T.FogExp2("#b1a795", 0.006);
+  const sun = new T.DirectionalLight("#ffd29d", 2.6);
+  sun.position.set(-32, 23, -33);
+  sun.target.position.set(0, 0, -6);
+  scene.add(sun, sun.target);
+  Object.assign(sun.shadow.camera, {
+    left: -33,
+    right: 33,
+    top: 34,
+    bottom: -34,
+    near: 0.1,
+    far: 105,
+  });
+  sun.shadow.normalBias = 0.025;
+  sun.shadow.bias = -0.00025;
+  scene.add(new T.HemisphereLight("#c2d6e0", "#665247", 0.38));
+  const coll = (x, z, w, d) =>
+    obstacles.push([x - w / 2, z - d / 2, x + w / 2, z + d / 2]);
+  function stamp(geo, mat, pos, scale, quat = new T.Quaternion()) {
+    const key = geo.uuid + mat.uuid;
+    if (!batches.has(key)) batches.set(key, { geo, mat, matrices: [] });
+    batches.get(key).matrices.push(new T.Matrix4().compose(pos, quat, scale));
+  }
+  function block(x, y, z, w, h, d, mat = concrete, solid = false) {
+    // Unique metre-scale UVs keep formwork and corrosion at a consistent texel density.
+    if (mat.map) {
+      const g = new T.BoxGeometry(w, h, d),
+        p = g.attributes.position,
+        n = g.attributes.normal,
+        uv = g.attributes.uv;
+      for (let i = 0; i < p.count; i++) {
+        const side = Math.abs(n.getX(i)) > 0.5,
+          top = Math.abs(n.getY(i)) > 0.5;
+        uv.setXY(
+          i,
+          (side ? p.getZ(i) : p.getX(i)) / 3,
+          (top ? p.getZ(i) : p.getY(i)) / 3,
+        );
+      }
+      const m = new T.Mesh(g, mat);
+      m.position.set(x, y, z);
+      m.castShadow = m.receiveShadow = true;
+      scene.add(m);
+    } else stamp(box, mat, v(x, y, z), v(w, h, d));
+    if (solid) coll(x, z, w, d);
+  }
+  function rod(a, b, r, mat = dark) {
+    const delta = b.clone().sub(a);
+    stamp(
+      cylinder,
+      mat,
+      a.clone().lerp(b, 0.5),
+      v(r, delta.length(), r),
+      new T.Quaternion().setFromUnitVectors(up, delta.normalize()),
+    );
+  }
+  await MeshoptSimplifier.ready;
+  const reductions = new WeakMap(),
+    detailGroups = [];
+  function reduced(geometry) {
+    if (
+      !geometry.index ||
+      geometry.index.count < 900 ||
+      !MeshoptSimplifier.supported
+    )
+      return geometry;
+    if (reductions.has(geometry)) return reductions.get(geometry);
+    const attr = geometry.attributes.position,
+      positions = new Float32Array(attr.count * 3);
+    for (let i = 0; i < attr.count; i++)
+      positions.set([attr.getX(i), attr.getY(i), attr.getZ(i)], i * 3);
+    const [indices] = MeshoptSimplifier.simplify(
+      Uint32Array.from(geometry.index.array),
+      positions,
+      3,
+      Math.floor((geometry.index.count * 0.16) / 3) * 3,
+      0.045,
+      ["Permissive"],
+    );
+    const result = new T.BufferGeometry();
+    for (const [key, value] of Object.entries(geometry.attributes))
+      result.setAttribute(key, value);
+    result.setIndex(new T.BufferAttribute(indices, 1));
+    result.boundingSphere = geometry.boundingSphere;
+    reductions.set(geometry, result);
+    return result;
+  }
+  function prop(name, x, z, extent, y = 0, angle = 0, source = models[name]) {
+    const obj = source.clone(true);
+    obj.position.set(0, 0, 0);
+    obj.rotation.y += angle;
+    obj.updateMatrixWorld(true);
+    const bounds = new T.Box3().setFromObject(obj),
+      size = bounds.getSize(v()),
+      center = bounds.getCenter(v());
+    const s = extent / Math.max(size.x, size.y, size.z);
+    const group = new T.Group();
+    group.add(obj);
+    group.scale.setScalar(s);
+    group.position.set(
+      x - center.x * s,
+      y - bounds.min.y * s,
+      z - center.z * s,
+    );
+    obj.traverse((m) => {
+      if (m.isMesh) {
+        m.castShadow = true;
+        m.receiveShadow = true;
+      }
+    });
+    const proxy = group.clone(true);
+    proxy.traverse((m) => {
+      if (m.isMesh) m.geometry = reduced(m.geometry);
+    });
+    scene.add(group, proxy);
+    detailGroups.push({ group, proxy });
+    return group;
+  }
+  function placard(
+    text,
+    sub,
+    x,
+    y,
+    z,
+    width,
+    base = "#d0c5a7",
+    ink = "#242e2b",
+  ) {
+    const c = document.createElement("canvas");
+    c.width = 1024;
+    c.height = 256;
+    const g = c.getContext("2d");
+    g.fillStyle = base;
+    g.fillRect(0, 0, 1024, 256);
+    g.fillStyle = ink;
+    g.fillRect(0, 0, 18, 256);
+    g.font = "bold 95px sans-serif";
+    g.fillText(text, 48, 121, 930);
+    g.font = "35px monospace";
+    g.fillText(sub, 52, 199, 920);
+    for (let i = 0; i < 4200; i++) {
+      g.fillStyle = rand() > 0.5 ? "#0002" : "#fff2";
+      g.fillRect(rand() * 1024, rand() * 256, rand() * 4 + 1, 1);
+    }
+    const t = new T.CanvasTexture(c);
+    t.colorSpace = T.SRGBColorSpace;
+    const sign = new T.Mesh(
+      new T.PlaneGeometry(width, width / 4),
+      new T.MeshStandardMaterial({ map: t, roughness: 0.85 }),
+    );
+    sign.position.set(x, y, z);
+    scene.add(sign);
+  }
+  block(0, -0.36, -5, 94, 0.7, 84, mats.worn_asphalt);
+  // Open-fronted maintenance shelter, covered work bay and rear archive wall.
+  function shed(x, z, w, d, h) {
+    block(x, h / 2, z + d / 2, w, h, 0.3, concrete, true);
+    for (const side of [-1, 1]) {
+      block(x + (side * w) / 2, h / 2, z, 0.24, h, d, concrete, true);
+      rod(
+        v(x + (side * w) / 2, h - 0.2, z - d / 2),
+        v(x + (side * w) / 2, h - 0.2, z + d / 2),
+        0.11,
+        rust,
+      );
+    }
+    block(x, h + 0.04, z, w + 0.8, 0.18, d + 0.9, iron);
+    block(x, 0.015, z, w, 0.05, d, mats.concrete_floor_02);
+    for (let k = -d / 2; k <= d / 2; k += 1.35)
+      block(x, h - 0.1, z + k, w, 0.16, 0.08, dark);
+  }
+  shed(0, 14, 9, 6, 3.7);
+  block(-2.6, 0.82, 13, 2.6, 0.13, 1.05, rust, true);
+  for (const x of [-3.7, -1.5])
+    for (const z of [12.6, 13.4]) rod(v(x, 0, z), v(x, 0.82, z), 0.045);
+  function manifestPage(x, y, z, side, passenger) {
+    const paper = document.createElement("canvas");
+    paper.width = 480;
+    paper.height = 640;
+    const g = paper.getContext("2d");
+    g.fillStyle = "#c9b996";
+    g.fillRect(0, 0, 480, 640);
+    g.fillStyle = "#283b36";
+    g.font = "bold 34px monospace";
+    g.fillText("EAST BANK", 32, 56);
+    g.font = "20px monospace";
+    g.fillText("CROSSING 04 / " + side, 32, 95);
+    for (let i = 0; i < 9; i++) {
+      g.fillRect(26, 143 + 48 * i, 420, 1);
+      g.fillText(String(i + 1).padStart(2, "0"), 32, 179 + 48 * i);
+    }
+    g.font = "italic 24px Georgia";
+    g.fillText(passenger, 118, 321);
+    g.fillText("N. Vale", 330, 572);
+    const map = new T.CanvasTexture(paper);
+    map.colorSpace = T.SRGBColorSpace;
+    const page = new T.Mesh(
+      new T.PlaneGeometry(0.29, 0.39),
+      new T.MeshStandardMaterial({ map, roughness: 0.93 }),
+    );
+    page.rotation.set(-Math.PI / 2, 0, 0.18);
+    page.position.set(x, y, z);
+    scene.add(page);
+  }
+  manifestPage(-1.75, 0.891, 13.15, "SHORE", "Mara Sol / missed departure");
+  manifestPage(-9.96, 0.889, -5.58, "FERRY", "Mara Sol / aboard");
+  prop("boombox", -2.6, 13, 0.78, 0.89, Math.PI * 0.18);
+  prop("painted_wooden_cabinet_02", -3.4, 15.8, 1.8, 0, 1.4);
+  coll(-3.4, 15.8, 1.1, 1);
+  prop("industrial_wall_lamp", -4.26, 13.2, 0.55, 2.25, 1.57);
+  for (const [x, z, s, y] of [
+    [2, 13.9, 0.59, 0],
+    [2.45, 13.5, 0.44, 0],
+    [2, 13.9, 0.42, 0.48],
+    [-3.4, 10.65, 0.65, 0],
+  ])
+    prop("cardboard_box_01", x, z, s, y, x);
+  placard("17   /   INTAKE", "EAST BANK MAINTENANCE", -2.4, 2.52, 16.82, 2.8);
+  prop("painted_wooden_bench", 2.8, 15, 2.2);
+  coll(2.8, 15, 2.2, 0.7);
+  block(-10, 0.44, -6, 3.2, 0.88, 1.4, concrete, true);
+  prop("metal_toolbox", -9, -6, 0.83, 0.88);
+  prop("medical_box", -10.5, -6, 0.56, 0.88);
+  block(-10, 1.8, -8.2, 5.1, 3.6, 0.32, iron, true);
+  placard("FIELD STORES", "FUSES   /   FILTERS", -10, 2.55, -8, 2.65);
+  prop("portable_generator", 8, -8, 2.5);
+  coll(8, -8, 2.1, 1.2);
+  block(10, 1.55, -11, 5.3, 3.1, 0.45, concrete, true);
+  prop("power_box_01", 9.6, -10.55, 1.15, 1);
+  placard(
+    "PUMP 04",
+    "MUNICIPAL WATER   /   EAST INTAKE",
+    9.6,
+    2.65,
+    -10.76,
+    3.4,
+  );
+  for (const x of [7.5, 8.15]) {
+    rod(v(x, 0.25, -10.4), v(x, 2.9, -10.4), 0.11, rust);
+    rod(v(x, 2.9, -10.4), v(x + 1, 2.9, -10.4), 0.11, rust);
+  }
+  block(1, 1.7, -21, 7, 3.4, 0.55, concrete, true);
+  prop("power_box_01", 1, -20.5, 1.35, 0.7);
+  placard("TAPE LIBRARY", "COASTAL SURVEY   /   2019", 1, 2.65, -20.71, 3.65);
+  block(5, 0.63, 3, 1.8, 1.26, 0.75, iron, true);
+  prop("boombox", 5, 3, 0.68, 1.26);
+  prop("covered_car", -8, 2, 4.6, 0, 0.45);
+  coll(-8, 2, 2.9, 3.6);
+  for (const [x, z, a] of [
+    [-13, 8, 0.2],
+    [13, 4, -0.2],
+    [12, -18, 0.3],
+    [-12, -18, 0.08],
+  ]) {
+    prop("concrete_road_barrier", x, z, 3.3, 0, a);
+    coll(x, z, 3.3, 0.85);
+  }
+  for (const [x, z] of [
+    [-14, 1],
+    [12, -2],
+    [-12, -17],
+  ])
+    prop("street_lamp_01", x, z, 7);
+  // The archive and pump share an enclosed service room with intake vents and an overhead cable tray.
+  for (const [x, z, w, h, depth] of [
+    [1, -21, 7, 3.4, 3.8],
+    [10, -11, 5.3, 3.1, 3.6],
+    [-10, -8.2, 5.1, 3.6, 2.9],
+  ]) {
+    for (const dir of [-1, 1])
+      block(
+        x + dir * (w / 2 - 0.09),
+        h / 2,
+        z - depth / 2,
+        0.18,
+        h,
+        depth,
+        iron,
+        true,
+      );
+    block(x, h / 2, z - depth, w, h, 0.22, concrete, true);
+    block(x, h + 0.08, z - depth / 2, w + 0.55, 0.2, depth + 0.55, iron);
+    for (let j = 0; j < 7; j++)
+      block(
+        x + w * 0.33,
+        h * 0.49 + j * 0.085,
+        z + 0.33,
+        w * 0.21,
+        0.045,
+        0.075,
+        dark,
+      );
+    for (let j = 0; j < 4; j++)
+      rod(
+        v(x - w * 0.46, h + 0.15, z - (depth * j) / 4),
+        v(x + w * 0.46, h + 0.15, z - (depth * j) / 4),
+        0.04,
+        dark,
+      );
+  }
+  const trayStart = v(1, 3.7, -23),
+    trayEnd = v(10, 3.6, -13);
+  for (const delta of [-0.21, 0.21])
+    rod(
+      trayStart.clone().add(v(delta, 0, 0)),
+      trayEnd.clone().add(v(delta, 0, 0)),
+      0.07,
+      dark,
+    );
+  for (let i = 0; i <= 22; i++) {
+    const p = trayStart.clone().lerp(trayEnd, i / 22);
+    rod(
+      p.clone().add(v(-0.24, 0, 0)),
+      p.clone().add(v(0.24, 0, 0)),
+      0.04,
+      rust,
+    );
+  }
+  // Main reflector: curved, separated panels, radial back trusses, feed horn and mount.
+  function dish(cx, cz, R, alt, az) {
+    const hub = v(cx, alt, cz),
+      q = new T.Quaternion().setFromEuler(new T.Euler(-0.94, az, 0, "YXZ"));
+    const pt = (r, a, offset = 0) =>
+      v(r * Math.cos(a), r * Math.sin(a), (0.31 * r * r) / R + offset)
+        .applyQuaternion(q)
+        .add(hub);
+    const pos = [],
+      uv = [],
+      indices = [];
+    const sectors = 32,
+      rings = 5;
+    for (let k = 0; k < sectors; k++) {
+      for (let j = 0; j < rings; j++) {
+        const start = pos.length / 3;
+        for (const [r, a] of [
+          [j, 0.012],
+          [j + 1, 0.012],
+          [j + 1, 0.988],
+          [j, 0.988],
+        ]) {
+          const rad = Math.max(0.12, (r / rings) * R),
+            ang = ((k + a) * Math.PI * 2) / sectors,
+            p = pt(rad, ang);
+          pos.push(...p.toArray());
+          uv.push((rad * Math.cos(ang)) / 4, (rad * Math.sin(ang)) / 4);
+        }
+        indices.push(start, start + 1, start + 2, start, start + 2, start + 3);
+      }
+      const a = (k * 2 * Math.PI) / sectors,
+        b = ((k + 1) * 2 * Math.PI) / sectors;
+      for (let j = 1; j <= rings; j++) {
+        rod(
+          pt((R * j) / rings, a, -0.04),
+          pt((R * j) / rings, b, -0.04),
+          R * 0.0045,
+          white,
+        );
+      }
+      rod(pt(0.1, a, -0.1), pt(R * 0.65, a, -R * 0.13), R * 0.012, dark);
+      rod(pt(R * 0.65, a, -R * 0.13), pt(R, a, -0.06), R * 0.009, white);
+      if (k % 8 === 0)
+        rod(pt(R * 0.89, a), pt(0, 0, R * 0.75), R * 0.009, white);
+    }
+    const geo = new T.BufferGeometry();
+    geo.setAttribute("position", new T.Float32BufferAttribute(pos, 3));
+    geo.setAttribute("uv", new T.Float32BufferAttribute(uv, 2));
+    geo.setIndex(indices);
+    geo.computeVertexNormals();
+    const skin = mats.concrete_floor_02.clone();
+    skin.color.set("#d8dbd7");
+    skin.normalScale.setScalar(0.19);
+    skin.side = T.DoubleSide;
+    skin.metalness = 0.32;
+    skin.roughness = 0.64;
+    const bowl = new T.Mesh(geo, skin);
+    bowl.castShadow = bowl.receiveShadow = true;
+    scene.add(bowl);
+    stamp(ball, dark, pt(0, 0, R * 0.75), v(R * 0.071, R * 0.071, R * 0.085));
+    for (const side of [-1, 1]) {
+      rod(v(cx + side * R * 0.42, 0.5, cz + R * 0.22), hub, R * 0.039, white);
+      rod(v(cx + side * R * 0.4, 0.5, cz - R * 0.35), hub, R * 0.032, rust);
+    }
+    for (const side of [-1, 1])
+      for (let j = 0; j < 5; j++) {
+        const t = j / 5,
+          n = (j + 1) / 5;
+        const leg = (z, u) =>
+          v(cx + side * R * 0.41, 0.5, cz + R * z).lerp(hub, u);
+        rod(leg(0.22, t), leg(-0.35, n), R * 0.009, white);
+        rod(leg(-0.35, t), leg(0.22, n), R * 0.009, dark);
+      }
+    block(cx, 0.4, cz, R * 1.19, 0.8, R * 0.94, concrete, true);
+  }
+  dish(12, -30, 12, 13, -0.41);
+  dish(-30, -48, 6.4, 8, 0.82);
+  // Radio lattice towers, segmented aerial cables, and pipe gallery.
+  function mast(x, z, h) {
+    const point = (level, corner) => {
+      const a = ((corner % 3) * Math.PI * 2) / 3,
+        r = (1 - level / h) * 1.2 + 0.2;
+      return v(x + Math.cos(a) * r, level, z + Math.sin(a) * r);
+    };
+    for (let j = 0; j < h; j += 2)
+      for (let k = 0; k < 3; k++) {
+        const next = Math.min(j + 2, h);
+        rod(point(j, k), point(next, k), 0.065, dark);
+        rod(point(j, k), point(next, k + 1), 0.037, rust);
+        rod(point(j, k), point(j, k + 1), 0.038, white);
+      }
+    stamp(
+      ball,
+      new T.MeshBasicMaterial({ color: 0xff522c }),
+      point(h, 0),
+      v(0.11, 0.11, 0.11),
+    );
+  }
+  mast(-16, -25, 22);
+  mast(26, -33, 29);
+  for (let k = 0; k < 3; k++) {
+    let last = v(-16, 16 + k * 0.25, -25);
+    for (let i = 1; i <= 24; i++) {
+      const t = i / 24,
+        p = v(
+          -16 + 42 * t,
+          16 + 3 * t - 3 * Math.sin(Math.PI * t) + k * 0.25,
+          -25 - 8 * t,
+        );
+      rod(last, p, 0.027);
+      last = p;
+    }
+  }
+  for (let j = 0; j < 4; j++) {
+    const y = 1.15 + j * 0.48;
+    rod(v(-15, y, -24), v(-15, y, 10), 0.18, rust);
+    for (let z = -24; z <= 10; z += 2)
+      stamp(
+        cylinder,
+        dark,
+        v(-15, y, z),
+        v(0.22, 0.075, 0.22),
+        new T.Quaternion().setFromAxisAngle(v(1, 0, 0), Math.PI / 2),
+      );
+  }
+  for (let z = -24; z < 11; z += 4) block(-15, 0.6, z, 1.5, 1.2, 0.4, concrete);
+  // Rebuild two occupied factory elevations from matched 3 m masonry and window modules.
+  const facade = models.modular_factory_facade;
+  function masonry(name, x, y, z, angle) {
+    const module = facade.getObjectByName(name);
+    const orientation = new T.Quaternion().setFromAxisAngle(up, angle);
+    module.traverse((m) => {
+      if (m.isMesh)
+        stamp(
+          reduced(m.geometry),
+          m.material,
+          v(x, y, z),
+          v(1, 1, 1),
+          orientation,
+        );
+    });
+  }
+  for (let floor = 0; floor < 3; floor++)
+    for (let bay = 0; bay < 10; bay++) {
+      const variant =
+        floor === 0 && bay === 3
+          ? "door_garage_centered_01"
+          : bay % 3 === 0
+            ? "window_tall_large_01"
+            : "window_centered_large_01";
+      for (const prefix of ["wall_", ""])
+        masonry(prefix + variant, -18, floor * 3, -24 + bay * 3, Math.PI / 2);
+    }
+  for (let floor = 0; floor < 2; floor++)
+    for (let bay = 0; bay < 12; bay++) {
+      const variant =
+        bay % 4 === 0 ? "window_tall_large_01" : "window_centered_large_01";
+      for (const prefix of ["wall_", ""])
+        masonry(prefix + variant, -24 + bay * 3, floor * 3, -32, 0);
+    }
+  block(-21, 4.3, -9, 5.8, 8.6, 31, dark);
+  block(-7, 2.9, -35, 38, 5.8, 5, dark);
+  // Damp patches vary inside the asphalt material, with no floating reflection meshes.
+  mats.worn_asphalt.color.set("#bebdb7");
+  mats.worn_asphalt.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace(
+      "#include <roughnessmap_fragment>",
+      `#include <roughnessmap_fragment>
+   float wetPatch = smoothstep(.38,.56,texture2D(roughnessMap,vRoughnessMapUv*.13).g);
+   roughnessFactor=mix(roughnessFactor,.21,wetPatch*.75);
+   diffuseColor.rgb*=1.-.23*wetPatch;`,
+    );
+  };
+  // Distant evacuation blocks and broken slab silhouettes.
+  // Hyperboloid shells, service bands and exhaust stacks distinguish the old generating district.
+  const shell = concrete.clone();
+  shell.color.set("#a29d91");
+  shell.side = T.DoubleSide;
+  for (const [x, z, h, r] of [
+    [-34, -86, 27, 10],
+    [-10, -96, 24, 9],
+    [46, -74, 19, 7],
+  ]) {
+    const profile = [];
+    for (let j = 0; j <= 24; j++) {
+      const t = j / 24;
+      profile.push(new T.Vector2(r * (0.53 + 1.08 * (t - 0.68) ** 2), t * h));
+    }
+    const tower = new T.Mesh(new T.LatheGeometry(profile, 60), shell);
+    tower.position.set(x, 0.4, z);
+    tower.castShadow = true;
+    scene.add(tower);
+    const lip = new T.Mesh(
+      new T.TorusGeometry(profile.at(-1).x, 0.16, 6, 64),
+      dark,
+    );
+    lip.rotation.x = Math.PI / 2;
+    lip.position.set(x, h + 0.42, z);
+    scene.add(lip);
+  }
+  for (const [x, z, h] of [
+    [-51, -69, 31],
+    [-47, -70, 34],
+    [32, -89, 27],
+    [36, -90, 25],
+  ]) {
+    const chimney = new T.Mesh(new T.CylinderGeometry(0.64, 1.05, h, 20), iron);
+    chimney.position.set(x, h / 2, z);
+    scene.add(chimney);
+    for (let j = 0; j < 4; j++)
+      stamp(cylinder, rust, v(x, h - j * 2.75 - 0.5, z), v(0.79, 1.15, 0.79));
+  }
+  for (let i = 0; i < 8; i++) {
+    const x = 22 + (i % 4) * 4.5,
+      z = -55 - Math.floor(i / 4) * 6,
+      h = 6 + (i % 3);
+    stamp(cylinder, white, v(x, h / 2, z), v(2.1, h, 2.1));
+    stamp(ball, dark, v(x, h, z), v(2.1, 0.65, 2.1));
+  }
+  for (const [x, z, s] of [
+    [12, -10, 1.3],
+    [12.8, -10.4, 1.4],
+    [-11, -7.1, 1.0],
+  ])
+    prop("propane_tank", x, z, s);
+  // Planted clumps use actual leaf meshes; shared instanced buffers and distance bands.
+  const grass =
+    models.grass_medium_01.getObjectByName("grass_medium_01_mid_a_LOD0") ||
+    models.grass_medium_01.children[0];
+  function scatter(source, count, range, height) {
+    const m = source.isMesh
+      ? source
+      : (() => {
+          let first;
+          source.traverse((o) => {
+            if (!first && o.isMesh) first = o;
+          });
+          return first;
+        })();
+    const geom = reduced(m.geometry);
+    geom.computeBoundingBox();
+    const b = geom.boundingBox,
+      sz = b.getSize(v()),
+      base = b.getCenter(v());
+    base.y = b.min.y;
+    for (let band = 0; band < 4; band++) {
+      const mesh = new T.InstancedMesh(geom, m.material, Math.ceil(count / 4));
+      const pivot = new T.Object3D();
+      for (let i = 0; i < mesh.count; i++) {
+        const x = (band % 2 === 0 ? -1 : 1) * (9 + rand() * range),
+          z = (band < 2 ? -20 : 1) + rand() * 17,
+          s = (height * (0.48 + rand())) / sz.y;
+        pivot.position.set(x, 0, z);
+        pivot.rotation.y = rand() * 6.28;
+        pivot.scale.setScalar(s);
+        pivot.updateMatrix();
+        mesh.setMatrixAt(
+          i,
+          pivot.matrix
+            .clone()
+            .multiply(
+              new T.Matrix4().makeTranslation(-base.x, -base.y, -base.z),
+            ),
+        );
+      }
+      mesh.receiveShadow = true;
+      mesh.computeBoundingSphere();
+      scene.add(mesh);
+      foliage.push(mesh);
+    }
+  }
+  scatter(grass, 300, 8, 0.44);
+  scatter(models.fern_02, 66, 7, 0.72);
+  for (const [x, z, h] of [
+    [-12, -8, 1.65],
+    [-12.8, -9, 1.95],
+    [12, -16, 1.63],
+    [13.5, -16.7, 2.25],
+    [-12, 6, 1.6],
+  ])
+    prop("shrub_02", x, z, h, 0, x, models.shrub_02.children[0]);
+  // Paint only where the yard was used.
+  for (let z = -19; z < 11; z += 3)
+    stamp(box, amber, v(-3.7, 0.007, z), v(0.095, 0.009, 1.25));
+  placard(
+    "SHELTER 17",
+    "EAST BANK   /   RECEIVING STATION",
+    0,
+    3.28,
+    17.82,
+    4.6,
+  );
+  for (const { geo, mat, matrices } of batches.values()) {
+    const mesh = new T.InstancedMesh(geo, mat, matrices.length);
+    matrices.forEach((m, i) => mesh.setMatrixAt(i, m));
+    mesh.castShadow = mesh.receiveShadow = true;
+    scene.add(mesh);
+  }
+  const drone = new T.Group();
+  scene.add(drone);
+  function moving(geo, mat, x, y, z, sx, sy, sz, parent) {
+    const m = new T.Mesh(geo, mat);
+    m.scale.set(sx, sy, sz);
+    m.position.set(x, y, z);
+    parent.add(m);
+    return m;
+  }
+  moving(ball, dark, 0, 0, 0, 0.43, 0.21, 0.36, drone);
+  const rotors = [];
+  for (const x of [-0.48, 0.48])
+    for (const z of [-0.42, 0.42]) {
+      moving(box, white, x * 0.55, 0, z * 0.55, 0.48, 0.06, 0.25, drone);
+      rotors.push(moving(box, dark, x, 0.1, z, 0.57, 0.024, 0.055, drone));
+    }
+  moving(
+    ball,
+    new T.MeshBasicMaterial({ color: 0xffa44e }),
+    0,
+    -0.15,
+    0.28,
+    0.09,
+    0.07,
+    0.08,
+    drone,
+  );
+  const anomaly = new T.Group();
+  scene.add(anomaly);
+  moving(ball, metal("#85918e", 0.17, 0.92), 0, 0, 0, 6.5, 0.82, 3, anomaly);
+  const strip = new T.MeshBasicMaterial({ color: "#ffcc82" });
+  for (let i = -4; i <= 4; i++)
+    moving(ball, strip, i, 0.02, 2.35, 0.065, 0.05, 0.07, anomaly);
+  const pilot = moving(
+    ball,
+    new T.MeshBasicMaterial({ color: 0x282727 }),
+    9.6,
+    1.9,
+    -10.22,
+    0.08,
+    0.08,
+    0.04,
+    scene,
+  );
+  const lamp = new T.PointLight("#ffab56", 5, 5);
+  lamp.position.set(-4.0, 2.4, 13.2);
+  scene.add(lamp);
+  let quality,
+    scale = 1,
+    stereo = false,
+    lastScale = 0,
+    slow = 0,
+    lastTime = 0;
+  function resize() {
+    camera.aspect = innerWidth / innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setPixelRatio(scale);
+    renderer.setSize(innerWidth, innerHeight, false);
+  }
+  function preset(q) {
+    quality = profiles[q] || profiles.High;
+    scale = Math.min(devicePixelRatio, quality[0]);
+    renderer.shadowMap.enabled = quality[2];
+    sun.castShadow = quality[2];
+    sun.shadow.mapSize.setScalar(quality[1]);
+    if (sun.shadow.map) {
+      sun.shadow.map.dispose();
+      sun.shadow.map = null;
+    }
+    renderer.shadowMap.needsUpdate = true;
+    resize();
+  }
+  preset(matchMedia("(pointer:coarse)").matches ? "Low" : "High");
+  window.addEventListener("resize", resize);
+  const bounds = [-13.8, -21, 13.8, 17];
+  const allowed = (x, z) =>
+    x > bounds[0] &&
+    x < bounds[2] &&
+    z > bounds[1] &&
+    z < bounds[3] &&
+    !obstacles.some(
+      ([a, b, c, d]) =>
+        x > a - 0.26 && x < c + 0.26 && z > b - 0.26 && z < d + 0.26,
+    );
+  function setCamera(pos, look) {
+    camera.position.copy(pos);
+    camera.lookAt(look);
+  }
+  function frame(player, mode, t, stage, motion = true, shot = 0) {
+    if (mode === "menu")
+      setCamera(
+        v(-10 + Math.sin(motion ? t * 0.047 : 0) * 1.2, 3.1, 5.2),
+        v(1, 8.6, -32),
+      );
+    else if (mode === "intro") {
+      const shots = [
+        [-1, 1.4, 11, -2.6, 1.1, 13],
+        [5, 2, 2, -13, 12, -25],
+        [-9, 1.9, 1, -9, 1, -6],
+        [4, 1.8, -4, 10, 2, -11],
+        [-5, 2.5, -8, 8, 10, -32],
+        [-1, 2.2, 15, 0, 1.5, 9],
+      ];
+      const a = shots[shot % shots.length];
+      setCamera(v(...a.slice(0, 3)), v(...a.slice(3)));
+    } else {
+      camera.position.set(player.x, 1.66, player.z);
+      camera.rotation.order = "YXZ";
+      camera.rotation.set(player.pitch, -player.yaw, 0);
+    }
+    drone.position.set(
+      2 + Math.sin(t * 0.23) * 5,
+      2.4 + Math.sin(t) * 0.18,
+      -13,
+    );
+    drone.rotation.y = t * 0.32;
+    rotors.forEach((r) => (r.rotation.y = t * 32));
+    pilot.material.color.setHex(stage >= 3 ? 0xffbb5a : 0x282727);
+    anomaly.visible = stage >= 4;
+    anomaly.position.set(
+      -10 + Math.sin(t * 0.08) * 19,
+      18 + Math.sin(t * 0.16),
+      -52,
+    );
+    detailGroups.forEach(({ group, proxy }) => {
+      group.visible =
+        group.position.distanceTo(camera.position) < quality[3] * 0.19;
+      proxy.visible = !group.visible;
+    });
+    foliage.forEach((o) => {
+      o.visible =
+        o.boundingSphere.center.distanceTo(camera.position) -
+          o.boundingSphere.radius <
+        quality[3];
+      o.count = Math.max(
+        1,
+        Math.floor(o.instanceMatrix.count * Math.min(1, quality[3] / 74)),
+      );
+    });
+
+    if (lastTime) slow = slow * 0.85 + Math.min(0.5, t - lastTime) * 0.15;
+    if (!fixedCapture && t - lastScale > 4 && slow > 0.042 && scale > 0.55) {
+      scale = Math.max(0.55, scale * 0.87);
+      resize();
+      lastScale = t;
+      slow = 0;
+    }
+    lastTime = t;
+    if (stereo && mode === "play") stereoEffect.render(scene, camera);
+    else renderer.render(scene, camera);
+  }
+  done("Assembling station");
+  await renderer.compileAsync(scene, camera);
+  done("Preparing shaders");
+  // A seated inspection tour has its own loop, quality preset and discrete viewpoints.
+  // Head pose is owned by WebXR for the entire session. No artificial camera motion.
+  async function tour(onEnd) {
+    const session = await navigator.xr.requestSession("immersive-vr", {
+      optionalFeatures: ["local-floor"],
+    });
+    const rig = new T.Group(),
+      spots = [
+        [0, 14],
+        [-6, -5],
+        [6, -6],
+        [2, -17],
+      ],
+      poses = [0, -0.6, 0.4, 0];
+    let spot = 0;
+    rig.add(camera);
+    scene.add(rig);
+    function place() {
+      rig.position.set(spots[spot][0], 1.5, spots[spot][1]);
+      rig.rotation.y = poses[spot];
+      camera.position.set(0, 0, 0);
+      camera.rotation.set(0, 0, 0);
+    }
+    const change = () => {
+      spot = (spot + 1) % spots.length;
+      place();
+    };
+    session.addEventListener("select", change);
+    const recenter = () => {
+      place();
+      const xrCamera = renderer.xr.getCamera();
+      const head = xrCamera.getWorldPosition(v());
+      rig.position.x += spots[spot][0] - head.x;
+      rig.position.z += spots[spot][1] - head.z;
+    };
+    session.addEventListener("squeeze", recenter);
+    const end = () => {
+      renderer.setAnimationLoop(null);
+      session.removeEventListener("select", change);
+      session.removeEventListener("squeeze", recenter);
+      scene.remove(rig);
+      rig.remove(camera);
+      renderer.xr.enabled = false;
+      onEnd();
+    };
+    session.addEventListener("end", end, { once: true });
+    try {
+      renderer.xr.enabled = true;
+      renderer.xr.setFramebufferScaleFactor(0.75);
+      renderer.xr.setReferenceSpaceType("local");
+      preset("Low");
+      detailGroups.forEach(({ group, proxy }) => {
+        group.visible = false;
+        proxy.visible = true;
+      });
+      foliage.forEach(
+        (o) =>
+          (o.count = Math.max(1, Math.floor(o.instanceMatrix.count * 0.2))),
+      );
+      place();
+      rig.position.y = 1.5;
+      await renderer.xr.setSession(session);
+      renderer.setAnimationLoop(() => renderer.render(scene, camera));
+    } catch (error) {
+      await session.end();
+      throw error;
+    }
+  }
+  return {
+    frame,
+    tour,
+    allowed,
+    preset,
+    stereo(value) {
+      stereo = value;
+    },
+    patrolX: (t) => 2 + Math.sin(t * 0.23) * 5,
+    renderer,
+  };
 }
