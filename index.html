@@ -1,46 +1,85 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no" />
-  <meta name="theme-color" content="#070c10" />
-  <meta name="description" content="AFTERSIGNAL: 2030 — an original, asset-free, procedural WebGL2 sci-fi survival mystery by Zyberlane XR." />
-  <title>AFTERSIGNAL: 2030 — Zyberlane XR</title>
-  <link rel="stylesheet" href="./style.css" />
-</head>
-<body>
-  <canvas id="world" aria-label="Procedurally rendered three-dimensional science-fiction world"></canvas>
-  <div class="grain" aria-hidden="true"></div><div class="vignette" aria-hidden="true"></div>
-  <div class="top-brand">ZYBERLANE <span>XR</span><i></i> INTERACTIVE WORLDS</div>
-  <div id="error" class="error hidden" role="alert"></div>
-  <div id="menu" class="screen">
-    <div class="titleline"><span class="mini-tag">AN ORIGINAL PROCEDURAL SURVIVAL EXPERIENCE</span>
-      <h1>AFTER<span>SIGNAL</span><small>2030</small></h1>
-      <p class="lead">THE WORLD CHANGED. THE SIGNAL REMAINED.</p>
-      <p class="description">2019 — 2030. The records were altered. The sky became unfamiliar. Humanity survived in the shadows of its own technology. Uncover the truth.</p>
-      <div class="menu-buttons"><button id="start">BEGIN THE STORY <span>↗</span></button><button id="continue">CONTINUE SURVIVAL <span>→</span></button><button id="settings">DISPLAY SETTINGS <span>⚙</span></button></div>
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#161a18" />
+    <title>AFTERSIGNAL 2030 · The Awakening</title>
+    <meta
+      name="description"
+      content="A first-person survival mystery at the last receiving station on the East Bank."
+    />
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <canvas
+      id="world"
+      aria-label="East Bank receiving station in three dimensions"
+    ></canvas>
+    <div id="loading" class="layer">
+      <div class="load-card">
+        <small>ZYBERLANE XR</small>
+        <h1>Acquiring signal</h1>
+        <progress id="progress" max="1" value="0"></progress>
+        <p id="loadlabel" role="status">Opening the receiving station…</p>
+        <button hidden id="retry">Retry loading</button>
+      </div>
     </div>
-    <div class="menu-bottom"><span>WEBGL2 · ZERO ART ASSETS · LOCAL SAVE</span><span>PROTOTYPE 0.1 · FICTIONAL UNIVERSE</span></div>
-  </div>
-  <div id="timeline" class="screen hidden">
-    <div class="episode-line">PROLOGUE <span id="year">2019</span> / 2030</div>
-    <div class="narrative"><div class="chapter" id="chapter">THE FIRST ARCHIVE</div><h2 id="story-title">The record that should not exist.</h2><p id="story-text"></p><div class="timeline-progress"><span id="timeline-progress"></span></div><div class="story-buttons"><button id="next-scene">NEXT TRANSMISSION →</button><button id="skip">SKIP PROLOGUE</button></div></div>
-  </div>
-  <div id="hud" class="hidden">
-    <div class="hud-top"><div class="day-label">2030 <span>· DAY <b id="day">01</b></span></div><div class="weather" id="weather">ASHFALL SECTOR · SIGNAL 17.4</div></div>
-    <div class="hud-bottom"><div class="stat-group"><div class="stat-label">CONDITION <span id="condition-value">100%</span></div><div class="meter"><span id="condition-bar"></span></div><div class="stat-label">ENERGY <span id="energy-value">100%</span></div><div class="meter energy"><span id="energy-bar"></span></div><div class="stat-label">WATER <span id="water-value">100%</span></div><div class="meter water"><span id="water-bar"></span></div></div>
-      <div class="center-task"><div class="task-caption">CURRENT OBJECTIVE</div><div id="objective">Search for emergency supplies</div><div id="distance">Explore the surroundings</div></div>
-      <div class="inventory">SUPPLIES <b id="supplies">0 / 2</b><div>ARCHIVE <b id="archive">LOCKED</b></div><div>TRANSMITTER <b id="relay">OFFLINE</b></div></div></div>
-    <div class="crosshair" aria-hidden="true"><i></i><i></i></div>
-    <div id="interact-prompt" class="hidden"><span id="interact-key">E</span> <span id="interact-label">INTERACT</span></div>
-    <div id="notification" class="hidden" role="status"></div>
-    <div class="hud-actions"><button id="log-btn" aria-label="Open field journal">JOURNAL</button><button id="vr-btn" aria-label="Toggle phone stereoscopic view">VR: OFF</button><button id="gyro-btn" aria-label="Enable phone orientation controls">MOTION</button><button id="pause-btn" aria-label="Pause game">MENU</button></div>
-    <div class="controls-help">W A S D MOVE · SHIFT RUN · E INTERACT · J JOURNAL · ESC PAUSE</div>
-    <div id="touch-ui" class="hidden"><div id="joystick" aria-label="Movement joystick"><div id="stick"></div></div><button id="touch-interact" aria-label="Interact">INTERACT</button><button id="touch-run" aria-label="Move faster">RUN</button></div>
-  </div>
-  <div id="journal" class="modal hidden"><div class="modal-content"><button class="close" id="close-journal" aria-label="Close">×</button><div class="mini-tag">ARCHIVE 01 / FIELD NOTES</div><h2>THE LAST SIGNAL</h2><p id="journal-text"></p><div class="separating-line"></div><p class="small">The narrative takes place in an original fictional timeline. UFOs, ancient legends, conspiracies, outbreaks and global conflicts are storytelling elements—not verified claims or predictions.</p></div></div>
-  <div id="pause" class="modal hidden"><div class="modal-content"><div class="mini-tag">CONNECTION SUSPENDED</div><h2>PAUSED</h2><p>Local progress is saved after discoveries.</p><button id="resume">RESUME</button><button id="back-menu" class="secondary">MAIN MENU</button><div class="separating-line"></div><label class="setting">Graphics <select id="quality"><option value="auto">AUTO</option><option value="low">LOW</option><option value="medium">MEDIUM</option><option value="high">HIGH</option></select></label><p class="small">This prototype includes phone stereoscopic rendering. Dedicated WebXR headset support is a later milestone.</p></div></div>
-  <noscript>This experience needs JavaScript and a browser supporting WebGL2.</noscript>
-  <script type="module" src="./game.js"></script>
-</body>
+    <header><span class="brandmark">Ⅲ</span> ZYBERLANE <b>XR</b></header>
+    <main id="menu" class="layer" hidden>
+      <div class="menu-copy">
+        <small><i></i> EAST BANK BROADCAST SERVICE</small>
+        <h1>AFTERSIGNAL<span>2030</span></h1>
+        <p class="subtitle">The Awakening</p>
+        <nav>
+          <button id="start">New game <b>→</b></button
+          ><button id="continue">Continue <b>→</b></button
+          ><button id="chapters">Chapters <b>→</b></button
+          ><button id="settings">Settings <b>→</b></button>
+        </nav>
+      </div>
+      <footer>
+        <span>CHAPTER 01 &nbsp;/&nbsp; SURVIVAL MYSTERY</span
+        ><span>RECEIVING STATION 17</span>
+      </footer>
+    </main>
+    <section id="intro" class="layer" hidden>
+      <article>
+        <small id="date"></small>
+        <h2 id="headline"></h2>
+        <p id="transcript"></p>
+        <button id="next">Advance →</button
+        ><button id="skip">Skip prologue</button>
+      </article>
+    </section>
+    <section id="hud" hidden>
+      <div class="task">
+        <small>FIELD OBJECTIVE</small><strong id="objective"></strong
+        ><span id="guide"></span>
+      </div>
+      <div class="reticle"></div>
+      <button id="interact" hidden></button>
+      <div id="notice" role="status"></div>
+      <div class="vitals">
+        <span id="vitals"></span><button id="journal">Field book</button
+        ><button id="pause">Pause</button>
+      </div>
+      <div id="touch">
+        <div id="stick" aria-label="Move"><b></b></div>
+      </div>
+    </section>
+    <dialog id="panel">
+      <form method="dialog">
+        <button aria-label="Close" class="close">×</button>
+      </form>
+      <small id="panel-kicker">STATION 17</small>
+      <h2 id="panel-title"></h2>
+      <div id="panel-body"></div>
+    </dialog>
+    <noscript>Enable JavaScript to play.</noscript>
+    <script type="module" src="./game.js"></script>
+  </body>
 </html>
